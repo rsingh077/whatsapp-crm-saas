@@ -1,0 +1,511 @@
+// ============================================================================
+// Hotel WhatsApp CRM — Prisma Schema
+// ============================================================================
+// Multi-tenant schema: each Organization represents a hotel.
+// Supports guests, conversations, messages, automation, campaigns & bookings.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Multi-Tenancy ──────────────────────────────────────────────────────────
+
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  logo        String?
+  website     String?
+  phone       String?
+  email       String?
+  address     String?
+  timezone    String   @default("UTC")
+  plan        Plan     @default(FREE)
+  stripeId    String?  @unique
+  whatsappPhoneNumberId String? @unique
+  whatsappBusinessId    String?
+  whatsappAccessToken   String?
+  webhookSecret         String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members     OrgMember[]
+  guests      Guest[]
+  conversations Conversation[]
+  tags        Tag[]
+  cannedReplies CannedReply[]
+  automations Automation[]
+  campaigns   Campaign[]
+  bookings    Booking[]
+  messageTemplates MessageTemplate[]
+
+  @@map("organizations")
+}
+
+enum Plan {
+  FREE
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+// ─── Users & Team ───────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  passwordHash  String?
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts    Account[]
+  sessions    Session[]
+  memberships OrgMember[]
+  assignedConversations Conversation[] @relation("AssignedAgent")
+  messages    Message[]
+  notes       GuestNote[]
+  activities  ActivityLog[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+model OrgMember {
+  id     String  @id @default(cuid())
+  role   Role    @default(AGENT)
+  userId String
+  orgId  String
+  isActive Boolean @default(true)
+  createdAt DateTime @default(now())
+
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, orgId])
+  @@map("org_members")
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MANAGER
+  AGENT
+}
+
+// ─── Guests (Contacts) ─────────────────────────────────────────────────────
+
+model Guest {
+  id          String      @id @default(cuid())
+  orgId       String
+  phone       String
+  name        String?
+  email       String?
+  avatar      String?
+  segment     GuestSegment @default(NEW)
+  vip         Boolean      @default(false)
+  metadata    Json?
+  lastSeenAt  DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  org           Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  bookings      Booking[]
+  notes         GuestNote[]
+  tags          GuestTag[]
+  campaignRecipients CampaignRecipient[]
+
+  @@unique([orgId, phone])
+  @@index([orgId, segment])
+  @@index([orgId, createdAt])
+  @@map("guests")
+}
+
+enum GuestSegment {
+  NEW
+  RETURNING
+  VIP
+  INACTIVE
+}
+
+model GuestNote {
+  id        String   @id @default(cuid())
+  guestId   String
+  authorId  String
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+
+  guest  Guest @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  author User  @relation(fields: [authorId], references: [id])
+
+  @@map("guest_notes")
+}
+
+// ─── Tags & Labels ──────────────────────────────────────────────────────────
+
+model Tag {
+  id    String @id @default(cuid())
+  orgId String
+  name  String
+  color String @default("#6366f1")
+
+  org           Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  conversations ConversationTag[]
+  guests        GuestTag[]
+
+  @@unique([orgId, name])
+  @@map("tags")
+}
+
+model ConversationTag {
+  conversationId String
+  tagId          String
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  tag          Tag          @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, tagId])
+  @@map("conversation_tags")
+}
+
+model GuestTag {
+  guestId String
+  tagId   String
+
+  guest Guest @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  tag   Tag   @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([guestId, tagId])
+  @@map("guest_tags")
+}
+
+// ─── Conversations & Messages ───────────────────────────────────────────────
+
+model Conversation {
+  id              String             @id @default(cuid())
+  orgId           String
+  guestId         String
+  assignedAgentId String?
+  status          ConversationStatus @default(OPEN)
+  priority        Priority           @default(MEDIUM)
+  subject         String?
+  lastMessageAt   DateTime?
+  closedAt        DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  org           Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  guest         Guest           @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  assignedAgent User?           @relation("AssignedAgent", fields: [assignedAgentId], references: [id])
+  messages      Message[]
+  tags          ConversationTag[]
+
+  @@index([orgId, status])
+  @@index([orgId, lastMessageAt])
+  @@index([assignedAgentId])
+  @@map("conversations")
+}
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Message {
+  id              String        @id @default(cuid())
+  conversationId  String
+  senderId        String?
+  direction       MessageDirection
+  type            MessageType   @default(TEXT)
+  content         String?       @db.Text
+  mediaUrl        String?
+  mediaMimeType   String?
+  whatsappMessageId String?     @unique
+  status          MessageStatus @default(SENT)
+  isInternal      Boolean       @default(false)
+  metadata        Json?
+  createdAt       DateTime      @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User?        @relation(fields: [senderId], references: [id])
+
+  @@index([conversationId, createdAt])
+  @@index([whatsappMessageId])
+  @@map("messages")
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  LOCATION
+  CONTACT
+  TEMPLATE
+  INTERACTIVE
+  REACTION
+  STICKER
+}
+
+enum MessageStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+// ─── Canned Replies ─────────────────────────────────────────────────────────
+
+model CannedReply {
+  id        String   @id @default(cuid())
+  orgId     String
+  title     String
+  shortcut  String
+  content   String   @db.Text
+  category  String?
+  createdAt DateTime @default(now())
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, shortcut])
+  @@map("canned_replies")
+}
+
+// ─── Automation ─────────────────────────────────────────────────────────────
+
+model Automation {
+  id        String           @id @default(cuid())
+  orgId     String
+  name      String
+  trigger   AutomationTrigger
+  conditions Json?
+  actions   Json
+  isActive  Boolean          @default(true)
+  priority  Int              @default(0)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, isActive])
+  @@map("automations")
+}
+
+enum AutomationTrigger {
+  MESSAGE_RECEIVED
+  CONVERSATION_OPENED
+  CONVERSATION_CLOSED
+  BOOKING_CREATED
+  BOOKING_CHECKIN
+  BOOKING_CHECKOUT
+  GUEST_CREATED
+  SCHEDULED
+}
+
+// ─── Message Templates (WhatsApp approved) ──────────────────────────────────
+
+model MessageTemplate {
+  id              String         @id @default(cuid())
+  orgId           String
+  name            String
+  language        String         @default("en")
+  category        TemplateCategory
+  headerType      String?
+  headerContent   String?
+  body            String         @db.Text
+  footer          String?
+  buttons         Json?
+  whatsappStatus  String?
+  whatsappId      String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  campaigns Campaign[]
+
+  @@unique([orgId, name, language])
+  @@map("message_templates")
+}
+
+enum TemplateCategory {
+  MARKETING
+  UTILITY
+  AUTHENTICATION
+}
+
+// ─── Campaigns & Broadcasts ─────────────────────────────────────────────────
+
+model Campaign {
+  id          String         @id @default(cuid())
+  orgId       String
+  templateId  String
+  name        String
+  status      CampaignStatus @default(DRAFT)
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  totalSent   Int            @default(0)
+  totalRead   Int            @default(0)
+  totalFailed Int            @default(0)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  org        Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  template   MessageTemplate    @relation(fields: [templateId], references: [id])
+  recipients CampaignRecipient[]
+
+  @@index([orgId, status])
+  @@map("campaigns")
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  COMPLETED
+  CANCELLED
+}
+
+model CampaignRecipient {
+  id         String                 @id @default(cuid())
+  campaignId String
+  guestId    String
+  status     CampaignRecipientStatus @default(PENDING)
+  sentAt     DateTime?
+  readAt     DateTime?
+  error      String?
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  guest    Guest    @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, guestId])
+  @@map("campaign_recipients")
+}
+
+enum CampaignRecipientStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+// ─── Bookings ───────────────────────────────────────────────────────────────
+
+model Booking {
+  id          String        @id @default(cuid())
+  orgId       String
+  guestId     String
+  roomType    String?
+  roomNumber  String?
+  checkIn     DateTime
+  checkOut    DateTime
+  adults      Int           @default(1)
+  children    Int           @default(0)
+  status      BookingStatus @default(CONFIRMED)
+  source      String?       @default("whatsapp")
+  totalAmount Decimal?      @db.Decimal(10, 2)
+  currency    String        @default("INR")
+  notes       String?       @db.Text
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  guest Guest        @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, checkIn])
+  @@index([orgId, status])
+  @@index([guestId])
+  @@map("bookings")
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED
+  NO_SHOW
+}
+
+// ─── Activity Log ───────────────────────────────────────────────────────────
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  orgId     String
+  userId    String?
+  action    String
+  entity    String
+  entityId  String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([orgId, createdAt])
+  @@index([entity, entityId])
+  @@map("activity_logs")
+}

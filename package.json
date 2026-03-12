@@ -1,0 +1,32 @@
+{
+  "name": "whatsapp-crm-saas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A WhatsApp-based CRM SaaS for hotels — manage guest conversations, bookings, and automation.",
+  "author": "Rajveer Singh",
+  "license": "MIT",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "type-check": "turbo type-check",
+    "db:generate": "pnpm --filter @hotel-crm/db generate",
+    "db:push": "pnpm --filter @hotel-crm/db push",
+    "db:migrate": "pnpm --filter @hotel-crm/db migrate",
+    "db:seed": "pnpm --filter @hotel-crm/db seed",
+    "db:studio": "pnpm --filter @hotel-crm/db studio",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "clean": "turbo clean && rimraf node_modules"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "prettier": "^3.4.0",
+    "rimraf": "^6.0.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0"
+  }
+}
