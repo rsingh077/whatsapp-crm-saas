@@ -161,7 +161,7 @@ export default async function AnalyticsPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {recentConversations.map((conv) => (
+                {recentConversations.map((conv: (typeof recentConversations)[number]) => (
                   <div key={conv.id} className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className="flex h-9 w-9 items-center justify-center rounded-full bg-whatsapp/10 text-sm font-medium text-whatsapp-dark">
